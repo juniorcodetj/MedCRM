@@ -1,0 +1,336 @@
+import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
+import { Prisma } from '@prisma/client';
+import * as argon2 from 'argon2';
+import { Response } from 'express';
+import Redis from 'ioredis';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { AuditLoggerService } from '@core/audit/audit-logger.service';
+import { REDIS_CLIENT } from '@core/cache/redis.module';
+import { PrismaService } from '@core/database/prisma.service';
+import { AuthenticatedUser, JwtAccessPayload } from '@core/security/jwt-payload';
+import { LoginDto } from './dto/login.dto';
+
+type RequestMetadata = {
+  ipAddress?: string;
+  userAgent?: string | string[];
+};
+
+type TokenResult = {
+  accessToken: string;
+  refreshToken: string;
+  bootstrap: BootstrapPayload;
+};
+
+type BootstrapPayload = {
+  tenant: {
+    id: string;
+    code: string;
+    name: string;
+    locale: string;
+    subscriptionPlan: string;
+  };
+  enabledModules: string[];
+  permissions: string[];
+  branches: Array<{ id: string; code: string; name: string }>;
+  featureFlags: Record<string, boolean | string | number>;
+};
+
+type RefreshPayload = {
+  sub: string;
+  tenant_id: string;
+  session_id: string;
+  fingerprint: string;
+};
+
+const SESSION_SECONDS = 60 * 60 * 24 * 30;
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwt: JwtService,
+    private readonly config: ConfigService,
+    private readonly audit: AuditLoggerService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
+  ) {}
+
+  async login(dto: LoginDto, metadata: RequestMetadata): Promise<TokenResult> {
+    const tenant = await this.prisma.tenant.findUnique({ where: { code: dto.tenantCode } });
+    if (!tenant || tenant.status !== 'active') {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { tenantId_email: { tenantId: tenant.id, email: dto.email.toLowerCase() } },
+      include: {
+        branchRoles: {
+          where: {
+            tenantId: tenant.id,
+            activeTo: null,
+            ...(dto.branchId ? { branchId: dto.branchId } : {})
+          },
+          include: {
+            branch: true,
+            role: { include: { permissions: { include: { permission: true } } } }
+          }
+        }
+      }
+    });
+
+    if (!user || user.status !== 'active') {
+      await this.audit.log({
+        tenantId: tenant.id,
+        action: 'auth.login.failed',
+        ipAddress: metadata.ipAddress,
+        userAgent: this.userAgent(metadata)
+      });
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const passwordValid = await argon2.verify(user.passwordHash, dto.password);
+    if (!passwordValid) {
+      await this.audit.log({
+        tenantId: tenant.id,
+        userId: user.id,
+        action: 'auth.login.failed',
+        ipAddress: metadata.ipAddress,
+        userAgent: this.userAgent(metadata)
+      });
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const context = await this.buildAuthContext(user.id, tenant.id, dto.branchId);
+    const sessionId = randomUUID();
+    const fingerprint = randomBytes(32).toString('hex');
+    const refreshToken = await this.signRefreshToken({
+      sub: user.id,
+      tenant_id: tenant.id,
+      session_id: sessionId,
+      fingerprint
+    });
+    const accessToken = await this.signAccessToken({
+      sub: user.id,
+      tenant_id: tenant.id,
+      branch_ids: context.branchIds,
+      role_ids: context.roleIds,
+      permissions: context.permissions,
+      session_id: sessionId
+    });
+
+    await this.prisma.userSession.create({
+      data: {
+        id: sessionId,
+        userId: user.id,
+        tenantId: tenant.id,
+        refreshTokenHash: await argon2.hash(refreshToken),
+        ipAddress: metadata.ipAddress,
+        userAgent: this.userAgent(metadata),
+        deviceName: dto.deviceName,
+        tokenFingerprint: fingerprint,
+        expiresAt: new Date(Date.now() + SESSION_SECONDS * 1000)
+      }
+    });
+
+    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    await this.cacheSession(sessionId, tenant.id, user.id, fingerprint);
+    await this.audit.log({
+      tenantId: tenant.id,
+      userId: user.id,
+      action: 'auth.login.success',
+      ipAddress: metadata.ipAddress,
+      userAgent: this.userAgent(metadata)
+    });
+
+    return { accessToken, refreshToken, bootstrap: await this.bootstrapFromIds(user.id, tenant.id, context) };
+  }
+
+  async refresh(refreshToken: string | undefined, metadata: RequestMetadata): Promise<TokenResult> {
+    if (!refreshToken) {
+      throw new UnauthorizedException('Refresh token is missing');
+    }
+
+    let payload: RefreshPayload;
+    try {
+      payload = await this.jwt.verifyAsync<RefreshPayload>(refreshToken, {
+        secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET')
+      });
+    } catch {
+      throw new UnauthorizedException('Refresh token is invalid');
+    }
+
+    const session = await this.prisma.userSession.findUnique({
+      where: { id: payload.session_id },
+      include: { user: true, tenant: true }
+    });
+
+    if (!session || session.revokedAt || session.expiresAt <= new Date()) {
+      throw new UnauthorizedException('Session is not active');
+    }
+
+    const matches = await argon2.verify(session.refreshTokenHash, refreshToken);
+    if (!matches || session.tokenFingerprint !== payload.fingerprint) {
+      await this.revokeSession(payload.session_id);
+      throw new UnauthorizedException('Refresh token was rotated');
+    }
+
+    const context = await this.buildAuthContext(session.userId, session.tenantId);
+    const nextFingerprint = randomBytes(32).toString('hex');
+    const nextRefreshToken = await this.signRefreshToken({
+      sub: session.userId,
+      tenant_id: session.tenantId,
+      session_id: session.id,
+      fingerprint: nextFingerprint
+    });
+    const nextAccessToken = await this.signAccessToken({
+      sub: session.userId,
+      tenant_id: session.tenantId,
+      branch_ids: context.branchIds,
+      role_ids: context.roleIds,
+      permissions: context.permissions,
+      session_id: session.id
+    });
+
+    await this.prisma.userSession.update({
+      where: { id: session.id },
+      data: {
+        refreshTokenHash: await argon2.hash(nextRefreshToken),
+        tokenFingerprint: nextFingerprint,
+        ipAddress: metadata.ipAddress,
+        userAgent: this.userAgent(metadata),
+        lastActivityAt: new Date()
+      }
+    });
+    await this.cacheSession(session.id, session.tenantId, session.userId, nextFingerprint);
+
+    return {
+      accessToken: nextAccessToken,
+      refreshToken: nextRefreshToken,
+      bootstrap: await this.bootstrapFromIds(session.userId, session.tenantId, context)
+    };
+  }
+
+  async logout(user: AuthenticatedUser): Promise<void> {
+    await this.revokeSession(user.sessionId);
+    await this.audit.log({
+      tenantId: user.tenantId,
+      userId: user.userId,
+      action: 'auth.logout'
+    });
+  }
+
+  async bootstrap(user: AuthenticatedUser, branchId?: string): Promise<BootstrapPayload> {
+    const context = await this.buildAuthContext(user.userId, user.tenantId, branchId);
+    return this.bootstrapFromIds(user.userId, user.tenantId, context);
+  }
+
+  attachRefreshCookie(response: Response, refreshToken: string): void {
+    response.cookie('refresh_token', refreshToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: this.config.get<string>('NODE_ENV') === 'production',
+      maxAge: SESSION_SECONDS * 1000,
+      path: '/auth/refresh'
+    });
+  }
+
+  private async buildAuthContext(userId: string, tenantId: string, branchId?: string) {
+    const branchRoles = await this.prisma.userBranchRole.findMany({
+      where: {
+        userId,
+        tenantId,
+        activeTo: null,
+        ...(branchId ? { branchId } : {})
+      },
+      include: {
+        branch: true,
+        role: { include: { permissions: { include: { permission: true } } } }
+      }
+    });
+
+    if (branchRoles.length === 0) {
+      throw new UnauthorizedException('User has no active branch access');
+    }
+
+    const branchIds = [...new Set(branchRoles.map((item) => item.branchId))];
+    const roleIds = [...new Set(branchRoles.map((item) => item.roleId))];
+    const permissions = [
+      ...new Set(
+        branchRoles.flatMap((item) => item.role.permissions.map((rolePermission) => rolePermission.permission.code))
+      )
+    ].sort();
+    const branches = branchRoles.map((item) => ({
+      id: item.branch.id,
+      code: item.branch.code,
+      name: item.branch.name
+    }));
+
+    return { branchIds, roleIds, permissions, branches };
+  }
+
+  private async bootstrapFromIds(
+    _userId: string,
+    tenantId: string,
+    context: Awaited<ReturnType<AuthService['buildAuthContext']>>
+  ): Promise<BootstrapPayload> {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+    const tenantModules = await this.prisma.tenantModule.findMany({
+      where: { tenantId, enabled: true },
+      include: { module: true }
+    });
+
+    return {
+      tenant: {
+        id: tenant.id,
+        code: tenant.code,
+        name: tenant.name,
+        locale: tenant.defaultLocale,
+        subscriptionPlan: tenant.subscriptionPlan
+      },
+      enabledModules: tenantModules.map((item) => item.module.code).sort(),
+      permissions: context.permissions,
+      branches: context.branches,
+      featureFlags: Object.fromEntries(tenantModules.map((item) => [`${item.module.code}.enabled`, true]))
+    };
+  }
+
+  private async signAccessToken(payload: JwtAccessPayload): Promise<string> {
+    return this.jwt.signAsync(payload, {
+      secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'),
+      expiresIn: this.config.get<string>('JWT_ACCESS_TTL', '15m') as JwtSignOptions['expiresIn']
+    });
+  }
+
+  private async signRefreshToken(payload: RefreshPayload): Promise<string> {
+    return this.jwt.signAsync(payload, {
+      secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
+      expiresIn: this.config.get<string>('JWT_REFRESH_TTL', '30d') as JwtSignOptions['expiresIn']
+    });
+  }
+
+  private async cacheSession(sessionId: string, tenantId: string, userId: string, fingerprint: string): Promise<void> {
+    await this.redis
+      .multi()
+      .hset(`session:${sessionId}:metadata`, { tenantId, userId })
+      .set(`session:${sessionId}:fingerprint`, fingerprint, 'EX', SESSION_SECONDS)
+      .del(`session:${sessionId}:revoked`)
+      .expire(`session:${sessionId}:metadata`, SESSION_SECONDS)
+      .exec();
+  }
+
+  private async revokeSession(sessionId: string): Promise<void> {
+    await this.prisma.userSession.updateMany({
+      where: { id: sessionId, revokedAt: null },
+      data: { revokedAt: new Date() }
+    });
+    await this.redis.set(`session:${sessionId}:revoked`, '1', 'EX', SESSION_SECONDS);
+  }
+
+  private userAgent(metadata: RequestMetadata): string | undefined {
+    if (!metadata.userAgent) {
+      return undefined;
+    }
+    return Array.isArray(metadata.userAgent) ? metadata.userAgent.join(', ') : metadata.userAgent;
+  }
+}

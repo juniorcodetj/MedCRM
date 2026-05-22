@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: medcrm-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-medcrm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medcrm_password}
+      POSTGRES_DB: ${POSTGRES_DB:-medcrm}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-medcrm} -d ${POSTGRES_DB:-medcrm}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: medcrm-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2026-05-06T19-54-26Z
+    container_name: medcrm-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-medcrm_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-medcrm_minio_password}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: ./backend
+      dockerfile: infrastructure/docker/Dockerfile
+      args:
+        APP_NAME: auth-service
+    container_name: medcrm-auth-service
+    env_file:
+      - .env.example
+    environment:
+      PORT: ${AUTH_SERVICE_PORT:-3001}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://medcrm:medcrm_password@postgres:5432/medcrm?schema=public}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api-gateway:
+    build:
+      context: ./backend
+      dockerfile: infrastructure/docker/Dockerfile
+      args:
+        APP_NAME: api-gateway
+    container_name: medcrm-api-gateway
+    env_file:
+      - .env.example
+    environment:
+      PORT: ${API_GATEWAY_PORT:-3000}
+      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://auth-service:3001}
+    depends_on:
+      auth-service:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: medcrm-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+      NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:3000}
+      INTERNAL_API_URL: ${INTERNAL_API_URL:-http://api-gateway:3000}
+      PORT: ${FRONTEND_PORT:-3002}
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    ports:
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3002/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  minio-data:

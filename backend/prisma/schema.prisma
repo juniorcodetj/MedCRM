@@ -1,0 +1,373 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id               String          @id @default(uuid()) @db.Uuid
+  code             String          @unique @db.VarChar(120)
+  name             String          @db.VarChar(255)
+  subscriptionPlan String          @map("subscription_plan") @db.VarChar(80)
+  defaultLocale    String          @default("ru") @map("default_locale") @db.VarChar(10)
+  timezone         String          @default("Europe/Moscow") @db.VarChar(80)
+  status           String          @default("active") @db.VarChar(40)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  branches         Branch[]
+  users            User[]
+  tenantModules    TenantModule[]
+  roles            Role[]
+  userBranchRoles  UserBranchRole[]
+  userSessions     UserSession[]
+  auditLogs        AuditLog[]
+  patients         Patient[]
+  services         Service[]
+  appointments     Appointment[]
+
+  @@map("tenants")
+}
+
+model Branch {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  code      String   @db.VarChar(120)
+  name      String   @db.VarChar(255)
+  address   String?
+  phone     String?  @db.VarChar(60)
+  timezone  String   @db.VarChar(80)
+  status    String   @default("active") @db.VarChar(40)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  userRoles UserBranchRole[]
+  patients  Patient[]
+  appointments Appointment[]
+
+  @@unique([tenantId, code])
+  @@map("branches")
+}
+
+model SystemModule {
+  id           String         @id @default(uuid()) @db.Uuid
+  code         String         @unique @db.VarChar(120)
+  name         String         @db.VarChar(255)
+  version      String         @db.VarChar(40)
+  isCore       Boolean        @default(false) @map("is_core")
+  dependencies Json           @default("[]")
+  status       String         @default("active") @db.VarChar(40)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenantModules TenantModule[]
+  permissions   Permission[]
+
+  @@map("system_modules")
+}
+
+model TenantModule {
+  id                String       @id @default(uuid()) @db.Uuid
+  tenantId          String       @map("tenant_id") @db.Uuid
+  moduleId          String       @map("module_id") @db.Uuid
+  enabled           Boolean      @default(false)
+  activatedAt       DateTime?    @map("activated_at") @db.Timestamptz(6)
+  configurationJson Json         @default("{}") @map("configuration_json")
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant            Tenant       @relation(fields: [tenantId], references: [id])
+  module            SystemModule @relation(fields: [moduleId], references: [id])
+
+  @@unique([tenantId, moduleId])
+  @@index([tenantId, enabled])
+  @@map("tenant_modules")
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  email         String   @db.VarChar(255)
+  phone         String?  @db.VarChar(60)
+  passwordHash  String   @map("password_hash")
+  firstName     String   @map("first_name") @db.VarChar(120)
+  lastName      String   @map("last_name") @db.VarChar(120)
+  language      String   @default("ru") @db.VarChar(10)
+  status        String   @default("active") @db.VarChar(40)
+  isSuperAdmin  Boolean  @default(false) @map("is_super_admin")
+  lastLoginAt   DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  branchRoles   UserBranchRole[]
+  sessions      UserSession[]
+  auditLogs     AuditLog[]
+  managedPatients Patient[] @relation("PatientAssignedManager")
+  createdAppointments Appointment[] @relation("AppointmentCreatedBy")
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String?  @map("tenant_id") @db.Uuid
+  code        String   @db.VarChar(120)
+  name        String   @db.VarChar(255)
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id])
+  permissions RolePermission[]
+  userRoles   UserBranchRole[]
+
+  @@unique([tenantId, code])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  moduleId    String?  @map("module_id") @db.Uuid
+  moduleCode  String   @map("module_code") @db.VarChar(120)
+  code        String   @unique @db.VarChar(160)
+  name        String   @db.VarChar(255)
+  description String?
+
+  module      SystemModule? @relation(fields: [moduleId], references: [id])
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+
+  role         Role       @relation(fields: [roleId], references: [id])
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserBranchRole {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  branchId   String   @map("branch_id") @db.Uuid
+  roleId     String   @map("role_id") @db.Uuid
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  activeFrom DateTime @default(now()) @map("active_from") @db.Timestamptz(6)
+  activeTo   DateTime? @map("active_to") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user       User     @relation(fields: [userId], references: [id])
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  branch     Branch   @relation(fields: [branchId], references: [id])
+  role       Role     @relation(fields: [roleId], references: [id])
+
+  @@index([tenantId, userId, branchId])
+  @@map("user_branch_roles")
+}
+
+model UserSession {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  refreshTokenHash  String   @map("refresh_token_hash")
+  ipAddress         String?  @map("ip_address") @db.Inet
+  userAgent         String?  @map("user_agent")
+  deviceName        String?  @map("device_name") @db.VarChar(255)
+  tokenFingerprint  String   @map("token_fingerprint") @db.VarChar(255)
+  lastActivityAt    DateTime @default(now()) @map("last_activity_at") @db.Timestamptz(6)
+  expiresAt         DateTime @map("expires_at") @db.Timestamptz(6)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user              User     @relation(fields: [userId], references: [id])
+  tenant            Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, userId])
+  @@map("user_sessions")
+}
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  branchId      String?  @map("branch_id") @db.Uuid
+  userId        String?  @map("user_id") @db.Uuid
+  action        String   @db.VarChar(160)
+  entityType    String?  @map("entity_type") @db.VarChar(120)
+  entityId      String?  @map("entity_id") @db.Uuid
+  oldValuesJson Json?    @map("old_values_json")
+  newValuesJson Json?    @map("new_values_json")
+  ipAddress     String?  @map("ip_address") @db.Inet
+  userAgent     String?  @map("user_agent")
+  requestId     String   @map("request_id") @db.VarChar(160)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  user          User?    @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, action, createdAt])
+  @@map("audit_logs")
+}
+
+model Patient {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  externalId           String?  @map("external_id") @db.VarChar(160)
+  patientCode          String   @map("patient_code") @db.VarChar(120)
+  firstName            String   @map("first_name") @db.VarChar(120)
+  lastName             String   @map("last_name") @db.VarChar(120)
+  middleName           String?  @map("middle_name") @db.VarChar(120)
+  fullName             String   @map("full_name") @db.VarChar(380)
+  birthDate            DateTime? @map("birth_date") @db.Date
+  gender               String?  @db.VarChar(40)
+  language             String   @default("ru") @db.VarChar(10)
+  status               String   @default("NEW") @db.VarChar(40)
+  registrationBranchId String?  @map("registration_branch_id") @db.Uuid
+  assignedManagerId    String?  @map("assigned_manager_id") @db.Uuid
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  archivedAt           DateTime? @map("archived_at") @db.Timestamptz(6)
+
+  tenant               Tenant   @relation(fields: [tenantId], references: [id])
+  registrationBranch   Branch?  @relation(fields: [registrationBranchId], references: [id])
+  assignedManager      User?    @relation("PatientAssignedManager", fields: [assignedManagerId], references: [id])
+  contacts             PatientContact[]
+  appointments         Appointment[]
+
+  @@unique([tenantId, patientCode])
+  @@index([tenantId, fullName])
+  @@index([tenantId, registrationBranchId])
+  @@map("patients")
+}
+
+model PatientContact {
+  id                  String   @id @default(uuid()) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  patientId           String   @map("patient_id") @db.Uuid
+  type                String   @db.VarChar(40)
+  value               String
+  normalizedValueHash String   @map("normalized_value_hash") @db.VarChar(160)
+  isPrimary           Boolean  @default(false) @map("is_primary")
+  isVerified          Boolean  @default(false) @map("is_verified")
+  comment             String?
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  patient             Patient  @relation(fields: [patientId], references: [id])
+
+  @@index([tenantId, type, normalizedValueHash])
+  @@map("patient_contacts")
+}
+
+model Service {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  code               String   @db.VarChar(120)
+  name               String   @db.VarChar(255)
+  durationMinutes    Int      @map("duration_minutes")
+  requiresRoom       Boolean  @default(false) @map("requires_room")
+  requiresEquipment  Boolean  @default(false) @map("requires_equipment")
+  color              String?  @db.VarChar(40)
+  isOnlineBookable   Boolean  @default(false) @map("is_online_bookable")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant             Tenant   @relation(fields: [tenantId], references: [id])
+  appointments       Appointment[]
+
+  @@unique([tenantId, code])
+  @@map("services")
+}
+
+model Appointment {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  branchId           String   @map("branch_id") @db.Uuid
+  patientId          String   @map("patient_id") @db.Uuid
+  employeeId         String   @map("employee_id") @db.Uuid
+  serviceId          String?  @map("service_id") @db.Uuid
+  appointmentNumber  String   @map("appointment_number") @db.VarChar(120)
+  bookingSource      String   @map("booking_source") @db.VarChar(60)
+  appointmentType    String   @map("appointment_type") @db.VarChar(60)
+  status             String   @default("SCHEDULED") @db.VarChar(40)
+  priority           String   @default("NORMAL") @db.VarChar(40)
+  startAt            DateTime @map("start_at") @db.Timestamptz(6)
+  endAt              DateTime @map("end_at") @db.Timestamptz(6)
+  durationMinutes    Int      @map("duration_minutes")
+  notes              String?
+  cancellationReason String?  @map("cancellation_reason")
+  confirmedAt        DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  checkedInAt        DateTime? @map("checked_in_at") @db.Timestamptz(6)
+  completedAt        DateTime? @map("completed_at") @db.Timestamptz(6)
+  cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  createdBy          String?  @map("created_by") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant             Tenant   @relation(fields: [tenantId], references: [id])
+  branch             Branch   @relation(fields: [branchId], references: [id])
+  patient            Patient  @relation(fields: [patientId], references: [id])
+  service            Service? @relation(fields: [serviceId], references: [id])
+  creator            User?    @relation("AppointmentCreatedBy", fields: [createdBy], references: [id])
+  statusHistory      AppointmentStatusHistory[]
+  resources          AppointmentResource[]
+
+  @@unique([tenantId, appointmentNumber])
+  @@index([tenantId, branchId, startAt, endAt])
+  @@index([tenantId, employeeId, startAt, endAt])
+  @@map("appointments")
+}
+
+model AppointmentStatusHistory {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  appointmentId String   @map("appointment_id") @db.Uuid
+  oldStatus     String?  @map("old_status") @db.VarChar(40)
+  newStatus     String   @map("new_status") @db.VarChar(40)
+  changedBy     String?  @map("changed_by") @db.Uuid
+  reason        String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  appointment   Appointment @relation(fields: [appointmentId], references: [id])
+
+  @@index([tenantId, appointmentId, createdAt])
+  @@map("appointment_status_history")
+}
+
+model AppointmentResource {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  appointmentId String   @map("appointment_id") @db.Uuid
+  resourceType  String   @map("resource_type") @db.VarChar(40)
+  resourceId    String   @map("resource_id") @db.Uuid
+  reservedFrom  DateTime @map("reserved_from") @db.Timestamptz(6)
+  reservedTo    DateTime @map("reserved_to") @db.Timestamptz(6)
+
+  appointment   Appointment @relation(fields: [appointmentId], references: [id])
+
+  @@index([tenantId, resourceType, resourceId, reservedFrom, reservedTo])
+  @@map("appointment_resources")
+}
+
+model AppointmentReservation {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  slotKey    String   @map("slot_key") @db.VarChar(255)
+  reservedBy String?  @map("reserved_by") @db.VarChar(255)
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, slotKey])
+  @@map("appointment_reservations")
+}
