@@ -1,0 +1,47 @@
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, UsePipes } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ZodValidationPipe } from '@core/common/zod-validation.pipe';
+import { CurrentUser } from '@core/security/current-user.decorator';
+import { AuthenticatedUser } from '@core/security/jwt-payload';
+import { RequirePermissions } from '@core/security/permissions.decorator';
+import { RequireModule } from '@core/security/modules.decorator';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { ModuleEnabledGuard } from '../../auth/guards/module-enabled.guard';
+import { RbacGuard } from '../../auth/guards/rbac.guard';
+import { DepartmentsService } from '../services/departments.service';
+import { DepartmentDto, DepartmentSchema } from '../dto/organization-structure.schemas';
+
+@ApiTags('departments')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, ModuleEnabledGuard, RbacGuard)
+@RequireModule('organization-structure')
+@Controller('departments')
+export class DepartmentsController {
+  constructor(private readonly departments: DepartmentsService) {}
+
+  @Get()
+  @RequirePermissions('organization.branches.read')
+  list(@CurrentUser() user: AuthenticatedUser) {
+    return this.departments.list(user);
+  }
+
+  @Post()
+  @RequirePermissions('organization.branches.manage')
+  @UsePipes(new ZodValidationPipe(DepartmentSchema))
+  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: DepartmentDto) {
+    return this.departments.create(user, dto);
+  }
+
+  @Patch(':id')
+  @RequirePermissions('organization.branches.manage')
+  @UsePipes(new ZodValidationPipe(DepartmentSchema))
+  update(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: DepartmentDto) {
+    return this.departments.update(user, id, dto);
+  }
+
+  @Delete(':id')
+  @RequirePermissions('organization.branches.manage')
+  delete(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.departments.delete(user, id);
+  }
+}

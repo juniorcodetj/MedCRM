@@ -58,6 +58,11 @@ export class RealtimeGateway implements OnGatewayConnection {
     this.logger.debug(`Emitted ${event} for tenant=${tenantId} branch=${branchId}`);
   }
 
+  emitCommunicationEvent(event: string, tenantId: string, payload: unknown): void {
+    this.server.to(`tenant:${tenantId}`).emit(event, payload);
+    this.logger.debug(`Emitted ${event} for tenant=${tenantId}`);
+  }
+
   private extractToken(client: Socket): string | undefined {
     const authToken = client.handshake.auth?.token;
     if (typeof authToken === 'string') return authToken;

@@ -11,6 +11,8 @@ import { REDIS_CLIENT } from '@core/cache/redis.module';
 import { PrismaService } from '@core/database/prisma.service';
 import { AuthenticatedUser, JwtAccessPayload } from '@core/security/jwt-payload';
 import { LoginDto } from './dto/login.dto';
+import { MfaConfirmDto, MfaVerifyDto } from './dto/mfa.dto';
+import { generateSecret, verifyTOTP } from './utils/totp';
 
 type RequestMetadata = {
   ipAddress?: string;
@@ -18,9 +20,11 @@ type RequestMetadata = {
 };
 
 type TokenResult = {
-  accessToken: string;
-  refreshToken: string;
-  bootstrap: BootstrapPayload;
+  accessToken?: string;
+  refreshToken?: string;
+  bootstrap?: BootstrapPayload;
+  mfaRequired?: boolean;
+  mfaToken?: string;
 };
 
 type BootstrapPayload = {
@@ -99,6 +103,35 @@ export class AuthService {
         userAgent: this.userAgent(metadata)
       });
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const twoFactor = await this.prisma.user2faSettings.findUnique({
+      where: { userId: user.id }
+    });
+
+    if (twoFactor && twoFactor.isEnabled) {
+      const mfaToken = await this.jwt.signAsync(
+        {
+          sub: user.id,
+          tenant_id: tenant.id,
+          branch_id: dto.branchId,
+          is_mfa_pending: true
+        },
+        {
+          secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'),
+          expiresIn: '5m'
+        }
+      );
+
+      await this.audit.log({
+        tenantId: tenant.id,
+        userId: user.id,
+        action: 'auth.2fa.required',
+        ipAddress: metadata.ipAddress,
+        userAgent: this.userAgent(metadata)
+      });
+
+      return { mfaRequired: true, mfaToken };
     }
 
     const context = await this.buildAuthContext(user.id, tenant.id, dto.branchId);
@@ -253,11 +286,29 @@ export class AuthService {
       throw new UnauthorizedException('User has no active branch access');
     }
 
+    const activeTenantModules = await this.prisma.tenantModule.findMany({
+      where: { tenantId, enabled: true },
+      include: { module: true }
+    });
+
+    const coreModules = await this.prisma.systemModule.findMany({
+      where: { isCore: true }
+    });
+
+    const enabledModuleCodes = new Set([
+      ...activeTenantModules.map((tm) => tm.module.code),
+      ...coreModules.map((m) => m.code)
+    ]);
+
     const branchIds = [...new Set(branchRoles.map((item) => item.branchId))];
     const roleIds = [...new Set(branchRoles.map((item) => item.roleId))];
     const permissions = [
       ...new Set(
-        branchRoles.flatMap((item) => item.role.permissions.map((rolePermission) => rolePermission.permission.code))
+        branchRoles.flatMap((item) =>
+          item.role.permissions
+            .filter((rp) => enabledModuleCodes.has(rp.permission.moduleCode))
+            .map((rolePermission) => rolePermission.permission.code)
+        )
       )
     ].sort();
     const branches = branchRoles.map((item) => ({
@@ -325,6 +376,167 @@ export class AuthService {
       data: { revokedAt: new Date() }
     });
     await this.redis.set(`session:${sessionId}:revoked`, '1', 'EX', SESSION_SECONDS);
+  }
+
+  async verifyMfa(dto: MfaVerifyDto, metadata: RequestMetadata): Promise<TokenResult> {
+    let payload: { sub: string; tenant_id: string; branch_id?: string; is_mfa_pending?: boolean };
+    try {
+      payload = await this.jwt.verifyAsync(dto.mfaToken, {
+        secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET')
+      });
+    } catch {
+      throw new UnauthorizedException('MFA token is invalid or expired');
+    }
+
+    if (!payload.is_mfa_pending) {
+      throw new UnauthorizedException('Invalid token purpose');
+    }
+
+    const mfaSettings = await this.prisma.user2faSettings.findUnique({
+      where: { userId: payload.sub }
+    });
+
+    if (!mfaSettings || !mfaSettings.isEnabled) {
+      throw new UnauthorizedException('2FA is not enabled for this user');
+    }
+
+    const isValid = verifyTOTP(dto.code, mfaSettings.secretHash);
+    if (!isValid) {
+      await this.audit.log({
+        tenantId: payload.tenant_id,
+        userId: payload.sub,
+        action: 'auth.2fa.failed',
+        ipAddress: metadata.ipAddress,
+        userAgent: this.userAgent(metadata)
+      });
+      throw new UnauthorizedException('Invalid 2FA code');
+    }
+
+    const context = await this.buildAuthContext(payload.sub, payload.tenant_id, payload.branch_id);
+    const sessionId = randomUUID();
+    const fingerprint = randomBytes(32).toString('hex');
+    const refreshToken = await this.signRefreshToken({
+      sub: payload.sub,
+      tenant_id: payload.tenant_id,
+      session_id: sessionId,
+      fingerprint
+    });
+    const accessToken = await this.signAccessToken({
+      sub: payload.sub,
+      tenant_id: payload.tenant_id,
+      branch_ids: context.branchIds,
+      role_ids: context.roleIds,
+      permissions: context.permissions,
+      session_id: sessionId
+    });
+
+    await this.prisma.userSession.create({
+      data: {
+        id: sessionId,
+        userId: payload.sub,
+        tenantId: payload.tenant_id,
+        refreshTokenHash: await argon2.hash(refreshToken),
+        ipAddress: metadata.ipAddress,
+        userAgent: this.userAgent(metadata),
+        deviceName: dto.deviceName,
+        tokenFingerprint: fingerprint,
+        expiresAt: new Date(Date.now() + SESSION_SECONDS * 1000)
+      }
+    });
+
+    await this.prisma.user.update({ where: { id: payload.sub }, data: { lastLoginAt: new Date() } });
+    await this.cacheSession(sessionId, payload.tenant_id, payload.sub, fingerprint);
+    await this.audit.log({
+      tenantId: payload.tenant_id,
+      userId: payload.sub,
+      action: 'auth.login.success',
+      ipAddress: metadata.ipAddress,
+      userAgent: this.userAgent(metadata)
+    });
+
+    return { accessToken, refreshToken, bootstrap: await this.bootstrapFromIds(payload.sub, payload.tenant_id, context) };
+  }
+
+  async enableMfa(user: AuthenticatedUser): Promise<{ secret: string; qrCodeUri: string }> {
+    const secret = generateSecret();
+    const dbUser = await this.prisma.user.findUniqueOrThrow({ where: { id: user.userId } });
+    const qrCodeUri = `otpauth://totp/MedCRM:${dbUser.email}?secret=${secret}&issuer=MedCRM&period=30`;
+
+    await this.prisma.user2faSettings.upsert({
+      where: { userId: user.userId },
+      update: {
+        secretHash: secret,
+        isEnabled: false
+      },
+      create: {
+        userId: user.userId,
+        secretHash: secret,
+        isEnabled: false
+      }
+    });
+
+    await this.audit.log({
+      tenantId: user.tenantId,
+      userId: user.userId,
+      action: 'auth.2fa.setup_initiated'
+    });
+
+    return { secret, qrCodeUri };
+  }
+
+  async confirmMfa(user: AuthenticatedUser, dto: MfaConfirmDto): Promise<{ success: boolean }> {
+    const mfaSettings = await this.prisma.user2faSettings.findUnique({
+      where: { userId: user.userId }
+    });
+
+    if (!mfaSettings) {
+      throw new UnauthorizedException('MFA setup was not initiated');
+    }
+
+    const isValid = verifyTOTP(dto.code, mfaSettings.secretHash);
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid 2FA code');
+    }
+
+    await this.prisma.user2faSettings.update({
+      where: { userId: user.userId },
+      data: { isEnabled: true }
+    });
+
+    await this.audit.log({
+      tenantId: user.tenantId,
+      userId: user.userId,
+      action: 'auth.2fa.enabled'
+    });
+
+    return { success: true };
+  }
+
+  async disableMfa(user: AuthenticatedUser, dto: MfaConfirmDto): Promise<{ success: boolean }> {
+    const mfaSettings = await this.prisma.user2faSettings.findUnique({
+      where: { userId: user.userId }
+    });
+
+    if (!mfaSettings || !mfaSettings.isEnabled) {
+      throw new UnauthorizedException('MFA is not enabled');
+    }
+
+    const isValid = verifyTOTP(dto.code, mfaSettings.secretHash);
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid 2FA code');
+    }
+
+    await this.prisma.user2faSettings.delete({
+      where: { userId: user.userId }
+    });
+
+    await this.audit.log({
+      tenantId: user.tenantId,
+      userId: user.userId,
+      action: 'auth.2fa.disabled'
+    });
+
+    return { success: true };
   }
 
   private userAgent(metadata: RequestMetadata): string | undefined {

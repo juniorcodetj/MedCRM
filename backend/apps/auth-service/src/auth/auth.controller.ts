@@ -10,6 +10,7 @@ import { RbacGuard } from './guards/rbac.guard';
 import { AuthService } from './auth.service';
 import { LoginDto, LoginSchema } from './dto/login.dto';
 import { RefreshDto, RefreshSchema } from './dto/refresh.dto';
+import { MfaConfirmDto, MfaConfirmSchema, MfaVerifyDto, MfaVerifySchema } from './dto/mfa.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -28,8 +29,53 @@ export class AuthController {
       ipAddress: request.ip,
       userAgent: request.headers['user-agent']
     });
-    this.auth.attachRefreshCookie(response, result.refreshToken);
+    if (result.mfaRequired) {
+      return { mfaRequired: true, mfaToken: result.mfaToken };
+    }
+    this.auth.attachRefreshCookie(response, result.refreshToken!);
     return { accessToken: result.accessToken, bootstrap: result.bootstrap };
+  }
+
+  @Post('2fa/verify')
+  @ApiOperation({ summary: 'Verify 2FA code to complete login' })
+  @UsePipes(new ZodValidationPipe(MfaVerifySchema))
+  async verifyMfa(
+    @Body() dto: MfaVerifyDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const result = await this.auth.verifyMfa(dto, {
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent']
+    });
+    this.auth.attachRefreshCookie(response, result.refreshToken!);
+    return { accessToken: result.accessToken, bootstrap: result.bootstrap };
+  }
+
+  @Post('2fa/enable')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Initiate 2FA setup for current user' })
+  async enableMfa(@CurrentUser() user: AuthenticatedUser) {
+    return this.auth.enableMfa(user);
+  }
+
+  @Post('2fa/confirm')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Confirm 2FA setup by verifying code' })
+  @UsePipes(new ZodValidationPipe(MfaConfirmSchema))
+  async confirmMfa(@CurrentUser() user: AuthenticatedUser, @Body() dto: MfaConfirmDto) {
+    return this.auth.confirmMfa(user, dto);
+  }
+
+  @Post('2fa/disable')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Disable 2FA by verifying code' })
+  @UsePipes(new ZodValidationPipe(MfaConfirmSchema))
+  async disableMfa(@CurrentUser() user: AuthenticatedUser, @Body() dto: MfaConfirmDto) {
+    return this.auth.disableMfa(user, dto);
   }
 
   @Post('refresh')
@@ -45,7 +91,7 @@ export class AuthController {
       ipAddress: request.ip,
       userAgent: request.headers['user-agent']
     });
-    this.auth.attachRefreshCookie(response, result.refreshToken);
+    this.auth.attachRefreshCookie(response, result.refreshToken!);
     return { accessToken: result.accessToken, bootstrap: result.bootstrap };
   }
 
@@ -66,4 +112,3 @@ export class AuthController {
     return this.auth.bootstrap(user, branchId);
   }
 }
-

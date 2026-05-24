@@ -1,10 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, UsePipes } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodValidationPipe } from '@core/common/zod-validation.pipe';
 import { CurrentUser } from '@core/security/current-user.decorator';
 import { AuthenticatedUser } from '@core/security/jwt-payload';
 import { RequirePermissions } from '@core/security/permissions.decorator';
+import { RequireModule } from '@core/security/modules.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleEnabledGuard } from '../auth/guards/module-enabled.guard';
 import { RbacGuard } from '../auth/guards/rbac.guard';
 import {
   AppointmentListQuery,
@@ -14,13 +16,26 @@ import {
   appointmentListQuerySchema,
   createAppointmentSchema,
   reserveSlotSchema,
-  updateAppointmentSchema
+  updateAppointmentSchema,
+  CreateWaitingListDto,
+  UpdateWaitingListDto,
+  ResourceBufferDto,
+  PublicSlotsQueryDto,
+  OnlineBookingReserveDto,
+  OnlineBookingConfirmDto,
+  createWaitingListSchema,
+  updateWaitingListSchema,
+  resourceBufferSchema,
+  publicSlotsQuerySchema,
+  onlineBookingReserveSchema,
+  onlineBookingConfirmSchema
 } from './dto/appointment.schemas';
 import { SmartSchedulingService } from './smart-scheduling.service';
 
 @ApiTags('appointments')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RbacGuard)
+@UseGuards(JwtAuthGuard, ModuleEnabledGuard, RbacGuard)
+@RequireModule('smart-scheduling')
 @Controller()
 export class SmartSchedulingController {
   constructor(private readonly scheduling: SmartSchedulingService) {}
@@ -86,6 +101,88 @@ export class SmartSchedulingController {
   @RequirePermissions('scheduling.availability.read')
   doctors(@CurrentUser() user: AuthenticatedUser) {
     return this.scheduling.doctors(user);
+  }
+
+  // Waiting List Endpoints
+  @Get('waiting-list')
+  @RequirePermissions('scheduling.appointments.read')
+  @ApiOperation({ summary: 'List active waitlist items ordered by priority' })
+  listWaitingList(@CurrentUser() user: AuthenticatedUser) {
+    return this.scheduling.listWaitingList(user);
+  }
+
+  @Post('waiting-list')
+  @RequirePermissions('scheduling.appointments.create')
+  @ApiOperation({ summary: 'Add a new patient to the waiting list' })
+  @UsePipes(new ZodValidationPipe(createWaitingListSchema))
+  createWaitingList(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateWaitingListDto) {
+    return this.scheduling.createWaitingList(user, dto);
+  }
+
+  @Patch('waiting-list/:id')
+  @RequirePermissions('scheduling.appointments.update')
+  @ApiOperation({ summary: 'Update patient waitlist preferences or status' })
+  @UsePipes(new ZodValidationPipe(updateWaitingListSchema))
+  updateWaitingList(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateWaitingListDto
+  ) {
+    return this.scheduling.updateWaitingList(user, id, dto);
+  }
+
+  @Delete('waiting-list/:id')
+  @RequirePermissions('scheduling.appointments.cancel')
+  @ApiOperation({ summary: 'Remove patient from the waiting list' })
+  deleteWaitingList(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.scheduling.deleteWaitingList(user, id);
+  }
+
+  // Resource Buffers Configuration
+  @Get('resource-buffers')
+  @RequirePermissions('scheduling.appointments.read')
+  @ApiOperation({ summary: 'List all resource buffer definitions' })
+  listResourceBuffers(@CurrentUser() user: AuthenticatedUser) {
+    return this.scheduling.listResourceBuffers(user);
+  }
+
+  @Post('resource-buffers')
+  @RequirePermissions('scheduling.appointments.update')
+  @ApiOperation({ summary: 'Configure clean-up/prep time buffers for a resource' })
+  @UsePipes(new ZodValidationPipe(resourceBufferSchema))
+  upsertResourceBuffer(@CurrentUser() user: AuthenticatedUser, @Body() dto: ResourceBufferDto) {
+    return this.scheduling.upsertResourceBuffer(user, dto);
+  }
+
+  @Delete('resource-buffers/:id')
+  @RequirePermissions('scheduling.appointments.update')
+  @ApiOperation({ summary: 'Delete resource buffer configuration' })
+  deleteResourceBuffer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.scheduling.deleteResourceBuffer(user, id);
+  }
+
+  // Public Booking / Widget Endpoints
+  @Get('availability/public-slots')
+  @RequirePermissions('scheduling.availability.read')
+  @ApiOperation({ summary: 'Browse available calendar slots for widgets' })
+  getPublicSlots(@CurrentUser() user: AuthenticatedUser, @Query(new ZodValidationPipe(publicSlotsQuerySchema)) query: PublicSlotsQueryDto) {
+    return this.scheduling.getPublicSlots(user, query);
+  }
+
+  @Post('online-booking/reserve')
+  @RequirePermissions('scheduling.appointments.create')
+  @ApiOperation({ summary: 'Hold slot temporarily (10 mins lock) for widget self-registration' })
+  @UsePipes(new ZodValidationPipe(onlineBookingReserveSchema))
+  onlineBookingReserve(@CurrentUser() user: AuthenticatedUser, @Body() dto: OnlineBookingReserveDto) {
+    return this.scheduling.onlineBookingReserve(user, dto);
+  }
+
+  @Post('online-booking/confirm')
+  @RequirePermissions('scheduling.appointments.create')
+  @ApiOperation({ summary: 'Confirm temporary hold using OTP verification' })
+  @UsePipes(new ZodValidationPipe(onlineBookingConfirmSchema))
+  onlineBookingConfirm(@CurrentUser() user: AuthenticatedUser, @Body() dto: OnlineBookingConfirmDto) {
+    return this.scheduling.onlineBookingConfirm(user, dto);
   }
 }
 
