@@ -10,6 +10,7 @@
     "start:dev:auth": "nest start auth-service --watch",
     "start:prod:api-gateway": "node dist/apps/api-gateway/main.js",
     "start:prod:auth-service": "node dist/apps/auth-service/main.js",
+    "test:gateway": "tsx --test apps/api-gateway/src/*.spec.ts",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",

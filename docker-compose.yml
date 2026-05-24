@@ -83,6 +83,7 @@ services:
     environment:
       PORT: ${API_GATEWAY_PORT:-3000}
       AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://auth-service:3001}
+      AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth-service:3001}
     depends_on:
       auth-service:
         condition: service_healthy

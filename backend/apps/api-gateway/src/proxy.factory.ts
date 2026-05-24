@@ -1,0 +1,79 @@
+import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createProxyMiddleware, Options } from 'http-proxy-middleware';
+import { ServerResponse } from 'node:http';
+import { GatewayRouteConfig } from './gateway-route.config';
+
+const logger = new Logger('GatewayProxy');
+
+function resolveTarget(config: ConfigService, route: GatewayRouteConfig): string {
+  if (route.targetEnv === 'AUTH_SERVICE_INTERNAL_URL') {
+    return config.get<string>('AUTH_SERVICE_INTERNAL_URL') ?? config.get<string>('AUTH_SERVICE_URL', 'http://localhost:3001');
+  }
+
+  return config.get<string>('AUTH_SERVICE_URL', 'http://localhost:3001');
+}
+
+function rewritePath(path: string, route: GatewayRouteConfig): string {
+  const suffix = path.startsWith(route.gatewayPrefix) ? path.slice(route.gatewayPrefix.length) : path;
+  return `${route.upstreamPrefix}${suffix}`;
+}
+
+function isServerResponse(value: unknown): value is ServerResponse {
+  return typeof value === 'object' && value !== null && 'writeHead' in value && 'end' in value;
+}
+
+export function createGatewayProxy(config: ConfigService, route: GatewayRouteConfig) {
+  const target = resolveTarget(config, route);
+  const options: Options = {
+    target,
+    changeOrigin: true,
+    xfwd: true,
+    ws: route.kind === 'websocket',
+    pathRewrite: (path) => rewritePath(path, route),
+    on: {
+      proxyReq: (proxyReq, req) => {
+        const requestId = req.headers['x-request-id'];
+        if (typeof requestId === 'string') {
+          proxyReq.setHeader('X-Request-Id', requestId);
+        }
+        proxyReq.setHeader('X-Gateway-Route', route.gatewayPrefix);
+        proxyReq.setHeader('X-Gateway-Kind', route.kind);
+      },
+      proxyReqWs: (proxyReq, req) => {
+        const requestId = req.headers['x-request-id'];
+        if (typeof requestId === 'string') {
+          proxyReq.setHeader('X-Request-Id', requestId);
+        }
+
+        const authorization = req.headers.authorization;
+        if (typeof authorization === 'string') {
+          proxyReq.setHeader('Authorization', authorization);
+        }
+
+        proxyReq.setHeader('X-Gateway-Route', route.gatewayPrefix);
+        proxyReq.setHeader('X-Gateway-Kind', route.kind);
+      },
+      error: (error, req, res) => {
+        logger.error(`Proxy error route=${route.gatewayPrefix} target=${target}: ${error.message}`);
+        if (!isServerResponse(res)) {
+          res.end();
+          return;
+        }
+
+        if (!res.headersSent) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+        }
+        res.end(
+          JSON.stringify({
+            error: 'bad_gateway',
+            route: route.gatewayPrefix,
+            requestId: req.headers['x-request-id']
+          })
+        );
+      }
+    }
+  };
+
+  return createProxyMiddleware(options);
+}
