@@ -37,6 +37,10 @@ export function createGatewayProxy(config: ConfigService, route: GatewayRouteCon
         if (typeof requestId === 'string') {
           proxyReq.setHeader('X-Request-Id', requestId);
         }
+        const correlationId = req.headers['x-correlation-id'];
+        if (typeof correlationId === 'string') {
+          proxyReq.setHeader('X-Correlation-Id', correlationId);
+        }
         proxyReq.setHeader('X-Gateway-Route', route.gatewayPrefix);
         proxyReq.setHeader('X-Gateway-Kind', route.kind);
       },
@@ -44,6 +48,10 @@ export function createGatewayProxy(config: ConfigService, route: GatewayRouteCon
         const requestId = req.headers['x-request-id'];
         if (typeof requestId === 'string') {
           proxyReq.setHeader('X-Request-Id', requestId);
+        }
+        const correlationId = req.headers['x-correlation-id'];
+        if (typeof correlationId === 'string') {
+          proxyReq.setHeader('X-Correlation-Id', correlationId);
         }
 
         const authorization = req.headers.authorization;
@@ -66,9 +74,18 @@ export function createGatewayProxy(config: ConfigService, route: GatewayRouteCon
         }
         res.end(
           JSON.stringify({
-            error: 'bad_gateway',
-            route: route.gatewayPrefix,
-            requestId: req.headers['x-request-id']
+            success: false,
+            error: {
+              code: 'BAD_GATEWAY',
+              message: 'Upstream service is unavailable',
+              details: {
+                route: route.gatewayPrefix,
+                target,
+                reason: error.message
+              },
+              requestId: req.headers['x-request-id'] || 'unknown',
+              timestamp: new Date().toISOString()
+            }
           })
         );
       }

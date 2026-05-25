@@ -49,10 +49,13 @@ describe('createRateLimitMiddleware', () => {
 
     assert.equal(nextCount, 1);
     assert.equal(second.statusCode, 429);
-    assert.deepEqual(second.body, {
-      error: 'rate_limited',
-      message: 'Too many requests'
-    });
+    const body = second.body as any;
+    assert.equal(body.success, false);
+    assert.equal(body.error.code, 'RATE_LIMITED');
+    assert.equal(body.error.message, 'Too many requests');
+    assert.equal(body.error.details.policy, 'auth');
+    assert.equal(body.error.details.limit, 1);
+
   });
 
   it('uses forwarded IP when gateway is behind a proxy', () => {

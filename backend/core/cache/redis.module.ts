@@ -1,4 +1,4 @@
-import { DynamicModule, Global, Module } from '@nestjs/common';
+import { DynamicModule, Global, Module, OnApplicationShutdown, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
@@ -6,7 +6,9 @@ export const REDIS_CLIENT = Symbol('REDIS_CLIENT');
 
 @Global()
 @Module({})
-export class RedisModule {
+export class RedisModule implements OnApplicationShutdown {
+  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
+
   static forRoot(): DynamicModule {
     return {
       module: RedisModule,
@@ -25,6 +27,14 @@ export class RedisModule {
       ],
       exports: [REDIS_CLIENT]
     };
+  }
+
+  async onApplicationShutdown() {
+    try {
+      await this.redis.quit();
+    } catch {
+      this.redis.disconnect();
+    }
   }
 }
 

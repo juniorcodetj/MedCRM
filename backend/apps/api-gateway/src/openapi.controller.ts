@@ -1,11 +1,15 @@
-import { Controller, Get } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Query } from '@nestjs/common';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { gatewayRoutes } from './gateway-route.config';
+import { OpenApiAggregatorService } from './openapi-aggregator.service';
 
 @ApiTags('gateway')
 @Controller('gateway')
 export class OpenApiController {
+  constructor(private readonly aggregator: OpenApiAggregatorService) {}
+
   @Get('routes')
+  @ApiOperation({ summary: 'Get all configured gateway routes' })
   routes() {
     return {
       version: 'v1',
@@ -21,9 +25,10 @@ export class OpenApiController {
   }
 
   @Get('openapi/upstreams')
+  @ApiOperation({ summary: 'Get downstream service OpenAPI endpoints' })
   upstreams() {
     return {
-      gateway: '/docs-json',
+      gateway: '/gateway/openapi/aggregated',
       upstreams: [
         {
           service: 'auth-service',
@@ -33,4 +38,12 @@ export class OpenApiController {
       ]
     };
   }
+
+  @Get('openapi/aggregated')
+  @ApiOperation({ summary: 'Get aggregated OpenAPI JSON' })
+  async getAggregated(@Query('refresh') refresh?: string) {
+    const forceRefresh = refresh === 'true' || refresh === '1';
+    return this.aggregator.getAggregatedSpec(forceRefresh);
+  }
 }
+

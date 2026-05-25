@@ -54,8 +54,18 @@ export function createRateLimitMiddleware(options?: Partial<RateLimitOptions>) {
 
     if (bucket.count > max) {
       res.status(429).json({
-        error: 'rate_limited',
-        message: 'Too many requests'
+        success: false,
+        error: {
+          code: 'RATE_LIMITED',
+          message: 'Too many requests',
+          details: {
+            policy,
+            limit: max,
+            resetAt: new Date(bucket.resetAt).toISOString()
+          },
+          requestId: req.headers['x-request-id'] || 'unknown',
+          timestamp: new Date().toISOString()
+        }
       });
       return;
     }

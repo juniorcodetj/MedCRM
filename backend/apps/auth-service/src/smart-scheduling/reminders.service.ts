@@ -12,22 +12,26 @@ export class RemindersService implements OnModuleInit, OnModuleDestroy {
   private queue!: Queue;
   private worker!: Worker;
 
+  private queueConnection!: Redis;
+  private workerConnection!: Redis;
+
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly prisma: PrismaService
   ) {}
 
   onModuleInit(): void {
-    const connection = this.redis.duplicate({ maxRetriesPerRequest: null });
+    this.queueConnection = this.redis.duplicate({ maxRetriesPerRequest: null });
+    this.workerConnection = this.redis.duplicate({ maxRetriesPerRequest: null });
 
-    this.queue = new Queue(APPOINTMENT_REMINDERS_QUEUE, { connection });
+    this.queue = new Queue(APPOINTMENT_REMINDERS_QUEUE, { connection: this.queueConnection });
 
     this.worker = new Worker(
       APPOINTMENT_REMINDERS_QUEUE,
       async (job: Job) => {
         await this.processReminder(job);
       },
-      { connection: this.redis.duplicate({ maxRetriesPerRequest: null }), concurrency: 5 }
+      { connection: this.workerConnection, concurrency: 5 }
     );
 
     this.worker.on('completed', (job) => {
@@ -42,6 +46,16 @@ export class RemindersService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     await this.worker?.close();
     await this.queue?.close();
+    try {
+      await this.queueConnection?.quit();
+    } catch {
+      this.queueConnection?.disconnect();
+    }
+    try {
+      await this.workerConnection?.quit();
+    } catch {
+      this.workerConnection?.disconnect();
+    }
   }
 
   async scheduleAppointmentReminder(appointmentId: string, startAt: Date): Promise<void> {
@@ -49,7 +63,7 @@ export class RemindersService implements OnModuleInit, OnModuleDestroy {
     await this.queue.add(
       'appointment.reminder.24h',
       { appointmentId },
-      { jobId: `${appointmentId}:24h`, delay, removeOnComplete: true, removeOnFail: 1000 }
+      { jobId: `${appointmentId}-24h`, delay, removeOnComplete: true, removeOnFail: 1000 }
     );
   }
 
