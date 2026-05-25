@@ -14,7 +14,8 @@ const modules = [
   { code: 'emr-ehr', name: 'EMR/EHR Clinical Module', version: '1.0.0', isCore: false, dependencies: ['auth', 'patient-crm', 'smart-scheduling'] },
   { code: 'finance-billing', name: 'Finance and SaaS Billing Module', version: '1.0.0', isCore: false, dependencies: ['auth', 'patient-crm', 'smart-scheduling', 'receptionist-workplace'] },
   { code: 'integration-gateway', name: 'Laboratories, Files & Integration Gateway', version: '1.0.0', isCore: false, dependencies: ['auth'] },
-  { code: 'business-intelligence', name: 'Business Intelligence & Executive Dashboards', version: '1.0.0', isCore: false, dependencies: ['auth'] }
+  { code: 'business-intelligence', name: 'Business Intelligence & Executive Dashboards', version: '1.0.0', isCore: false, dependencies: ['auth'] },
+  { code: 'inventory-warehouse', name: 'Inventory & Warehouse', version: '1.0.0', isCore: false, dependencies: ['auth', 'organization-structure', 'finance-billing'] }
 ];
 
 const permissions = [
@@ -246,6 +247,42 @@ async function main(): Promise<void> {
     }
   });
 
+  const serviceDentalTherapy = await prisma.service.upsert({
+    where: { tenantId_code: { tenantId: tenant.id, code: 'dental-therapy' } },
+    update: {
+      basePrice: new Prisma.Decimal(4200),
+      durationMinutes: 45,
+      color: '#0ea5e9'
+    },
+    create: {
+      tenantId: tenant.id,
+      code: 'dental-therapy',
+      name: 'Лечение кариеса',
+      durationMinutes: 45,
+      color: '#0ea5e9',
+      isOnlineBookable: true,
+      basePrice: new Prisma.Decimal(4200)
+    }
+  });
+
+  const serviceCardioDiagnostics = await prisma.service.upsert({
+    where: { tenantId_code: { tenantId: tenant.id, code: 'cardio-diagnostics' } },
+    update: {
+      basePrice: new Prisma.Decimal(2600),
+      durationMinutes: 30,
+      color: '#ef4444'
+    },
+    create: {
+      tenantId: tenant.id,
+      code: 'cardio-diagnostics',
+      name: 'ЭКГ + консультация',
+      durationMinutes: 30,
+      color: '#ef4444',
+      isOnlineBookable: true,
+      basePrice: new Prisma.Decimal(2600)
+    }
+  });
+
   // 1. Specialties
   const specialtiesData = [
     { code: 'dentist', name: 'Стоматолог', internationalCode: 'DENT' },
@@ -379,11 +416,53 @@ async function main(): Promise<void> {
     }
   });
 
+  const cardioOffice = await prisma.room.upsert({
+    where: { tenantId_branchId_code: { tenantId: tenant.id, branchId: branch.id, code: 'room-103' } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      branchId: branch.id,
+      departmentId: cardiologyDept.id,
+      roomTypeId: roomTypeMap.get('DOCTOR_OFFICE')!,
+      code: 'room-103',
+      name: 'Кабинет кардиолога 103',
+      floor: 1,
+      capacity: 1
+    }
+  });
+
+  const treatmentRoom = await prisma.room.upsert({
+    where: { tenantId_branchId_code: { tenantId: tenant.id, branchId: branch.id, code: 'room-104' } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      branchId: branch.id,
+      departmentId: dentistryDept.id,
+      roomTypeId: roomTypeMap.get('TREATMENT_ROOM')!,
+      code: 'room-104',
+      name: 'Процедурный кабинет 104',
+      floor: 1,
+      capacity: 2
+    }
+  });
+
   // Allowed specialties in room-102
   await prisma.roomSpecialty.upsert({
     where: { roomId_specialtyId: { roomId: usiOffice.id, specialtyId: specialtyMap.get('radiologist')! } },
     update: {},
     create: { roomId: usiOffice.id, specialtyId: specialtyMap.get('radiologist')! }
+  });
+
+  await prisma.roomSpecialty.upsert({
+    where: { roomId_specialtyId: { roomId: docOffice.id, specialtyId: specialtyMap.get('dentist')! } },
+    update: {},
+    create: { roomId: docOffice.id, specialtyId: specialtyMap.get('dentist')! }
+  });
+
+  await prisma.roomSpecialty.upsert({
+    where: { roomId_specialtyId: { roomId: cardioOffice.id, specialtyId: specialtyMap.get('cardiologist')! } },
+    update: {},
+    create: { roomId: cardioOffice.id, specialtyId: specialtyMap.get('cardiologist')! }
   });
 
   // 7. Equipment
@@ -420,7 +499,128 @@ async function main(): Promise<void> {
     }
   });
 
+  const seedEmployeeWithUser = async (input: {
+    employeeNumber: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    departmentId: string;
+    positionCode: string;
+    specialtyCode: string;
+    roomId: string;
+  }) => {
+    const user = await prisma.user.upsert({
+      where: { tenantId_email: { tenantId: tenant.id, email: input.email } },
+      update: {
+        firstName: input.firstName,
+        lastName: input.lastName,
+        passwordHash,
+        status: 'active'
+      },
+      create: {
+        tenantId: tenant.id,
+        email: input.email,
+        passwordHash,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        language: 'ru',
+        status: 'active',
+        isSuperAdmin: false
+      }
+    });
+
+    const seededEmployee = await prisma.employee.upsert({
+      where: { tenantId_employeeNumber: { tenantId: tenant.id, employeeNumber: input.employeeNumber } },
+      update: {
+        userId: user.id,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        phone: input.phone,
+        email: input.email,
+        status: 'ACTIVE'
+      },
+      create: {
+        tenantId: tenant.id,
+        userId: user.id,
+        employeeNumber: input.employeeNumber,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        phone: input.phone,
+        email: input.email,
+        hireDate: new Date('2024-02-01'),
+        status: 'ACTIVE'
+      }
+    });
+
+    await prisma.userBranchRole.deleteMany({
+      where: { tenantId: tenant.id, userId: user.id, branchId: branch.id }
+    });
+    await prisma.userBranchRole.create({
+      data: {
+        userId: user.id,
+        tenantId: tenant.id,
+        branchId: branch.id,
+        roleId: ownerRole.id,
+        isPrimary: true
+      }
+    });
+
+    await prisma.employeePosition.deleteMany({ where: { tenantId: tenant.id, employeeId: seededEmployee.id } });
+    await prisma.employeePosition.create({
+      data: {
+        tenantId: tenant.id,
+        employeeId: seededEmployee.id,
+        branchId: branch.id,
+        departmentId: input.departmentId,
+        positionId: positionMap.get(input.positionCode)!,
+        specialtyId: specialtyMap.get(input.specialtyCode)!,
+        rate: 1.0,
+        isPrimary: true
+      }
+    });
+
+    await prisma.employeeRoomAssignment.deleteMany({ where: { tenantId: tenant.id, employeeId: seededEmployee.id } });
+    await prisma.employeeRoomAssignment.create({
+      data: {
+        tenantId: tenant.id,
+        employeeId: seededEmployee.id,
+        branchId: branch.id,
+        departmentId: input.departmentId,
+        roomId: input.roomId,
+        specialtyId: specialtyMap.get(input.specialtyCode)!
+      }
+    });
+
+    return seededEmployee;
+  };
+
+  const dentistEmployee = await seedEmployeeWithUser({
+    employeeNumber: 'EMP-000002',
+    email: 'dentist@demo.clinic',
+    firstName: 'Рустам',
+    lastName: 'Каримов',
+    phone: '+992900110022',
+    departmentId: dentistryDept.id,
+    positionCode: 'CHIEF_DOCTOR',
+    specialtyCode: 'dentist',
+    roomId: docOffice.id
+  });
+
+  const cardiologistEmployee = await seedEmployeeWithUser({
+    employeeNumber: 'EMP-000003',
+    email: 'cardio@demo.clinic',
+    firstName: 'Дилфуза',
+    lastName: 'Саидова',
+    phone: '+992900330044',
+    departmentId: cardiologyDept.id,
+    positionCode: 'CHIEF_DOCTOR',
+    specialtyCode: 'cardiologist',
+    roomId: cardioOffice.id
+  });
+
   // Assign position
+  await prisma.employeePosition.deleteMany({ where: { tenantId: tenant.id, employeeId: employee.id } });
   await prisma.employeePosition.create({
     data: {
       tenantId: tenant.id,
@@ -435,6 +635,7 @@ async function main(): Promise<void> {
   });
 
   // Assign room
+  await prisma.employeeRoomAssignment.deleteMany({ where: { tenantId: tenant.id, employeeId: employee.id } });
   await prisma.employeeRoomAssignment.create({
     data: {
       tenantId: tenant.id,
@@ -460,6 +661,43 @@ async function main(): Promise<void> {
         timezone: 'Europe/Moscow'
       }
     });
+  }
+
+  await prisma.workingSchedule.deleteMany({
+    where: {
+      tenantId: tenant.id,
+      entityType: { in: ['employee', 'room'] },
+      entityId: { in: [employee.id, dentistEmployee.id, cardiologistEmployee.id, docOffice.id, usiOffice.id, cardioOffice.id, treatmentRoom.id] }
+    }
+  });
+
+  for (let weekday = 1; weekday <= 5; weekday++) {
+    for (const entityId of [employee.id, dentistEmployee.id, cardiologistEmployee.id]) {
+      await prisma.workingSchedule.create({
+        data: {
+          tenantId: tenant.id,
+          entityType: 'employee',
+          entityId,
+          weekday,
+          startTime: '08:00',
+          endTime: '18:00',
+          timezone: 'Europe/Moscow'
+        }
+      });
+    }
+    for (const entityId of [docOffice.id, usiOffice.id, cardioOffice.id, treatmentRoom.id]) {
+      await prisma.workingSchedule.create({
+        data: {
+          tenantId: tenant.id,
+          entityType: 'room',
+          entityId,
+          weekday,
+          startTime: '08:00',
+          endTime: '18:00',
+          timezone: 'Europe/Moscow'
+        }
+      });
+    }
   }
 
   // 10. Patient CRM Core Seed Data
@@ -558,6 +796,39 @@ async function main(): Promise<void> {
   const getPhoneHash = (phone: string) => {
     const norm = phone.toLowerCase().replace(/[\s()+-]/g, '');
     return createHash('sha256').update(norm).digest('hex');
+  };
+
+  const deleteAppointmentByNumber = async (appointmentNumber: string) => {
+    const appointment = await prisma.appointment.findFirst({
+      where: { tenantId: tenant.id, appointmentNumber }
+    });
+    if (!appointment) return;
+
+    await prisma.paymentAllocation.deleteMany({ where: { invoiceItem: { invoice: { appointmentId: appointment.id } } } });
+    await prisma.patientDebt.deleteMany({ where: { invoice: { appointmentId: appointment.id } } });
+    await prisma.invoiceItem.deleteMany({ where: { invoice: { appointmentId: appointment.id } } });
+    await prisma.invoice.deleteMany({ where: { appointmentId: appointment.id } });
+    await prisma.appointmentStatusHistory.deleteMany({ where: { appointmentId: appointment.id } });
+    await prisma.appointmentResource.deleteMany({ where: { appointmentId: appointment.id } });
+    await prisma.appointmentVisitState.deleteMany({ where: { appointmentId: appointment.id } });
+    await prisma.visitQueue.deleteMany({ where: { appointmentId: appointment.id } });
+
+    const encounters = await prisma.encounter.findMany({ where: { appointmentId: appointment.id } });
+    const encounterIds = encounters.map((encounter) => encounter.id);
+    const compositions = await prisma.clinicalComposition.findMany({ where: { encounterId: { in: encounterIds } } });
+    const compositionIds = compositions.map((composition) => composition.id);
+    const sections = await prisma.clinicalSection.findMany({ where: { compositionId: { in: compositionIds } } });
+    const sectionIds = sections.map((section) => section.id);
+
+    await prisma.clinicalElement.deleteMany({ where: { sectionId: { in: sectionIds } } });
+    await prisma.clinicalSection.deleteMany({ where: { compositionId: { in: compositionIds } } });
+    await prisma.clinicalComposition.deleteMany({ where: { encounterId: { in: encounterIds } } });
+    await prisma.encounterDiagnosis.deleteMany({ where: { encounterId: { in: encounterIds } } });
+    await prisma.prescriptionItem.deleteMany({ where: { prescription: { encounterId: { in: encounterIds } } } });
+    await prisma.prescription.deleteMany({ where: { encounterId: { in: encounterIds } } });
+    await prisma.encounter.deleteMany({ where: { appointmentId: appointment.id } });
+
+    await prisma.appointment.delete({ where: { id: appointment.id } });
   };
 
   // Patients (P-000001, P-000002, P-000003)
@@ -684,6 +955,125 @@ async function main(): Promise<void> {
     }
   });
 
+  const seedPatient = async (input: {
+    code: string;
+    firstName: string;
+    lastName: string;
+    middleName?: string;
+    birthDate: string;
+    gender: string;
+    status: string;
+    phone: string;
+    city?: string;
+    addressLine?: string;
+  }) => {
+    const fullName = [input.lastName, input.firstName, input.middleName].filter(Boolean).join(' ');
+    const patient = await prisma.patient.upsert({
+      where: { tenantId_patientCode: { tenantId: tenant.id, patientCode: input.code } },
+      update: {
+        firstName: input.firstName,
+        lastName: input.lastName,
+        middleName: input.middleName,
+        fullName,
+        birthDate: new Date(input.birthDate),
+        gender: input.gender,
+        status: input.status
+      },
+      create: {
+        tenantId: tenant.id,
+        patientCode: input.code,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        middleName: input.middleName,
+        fullName,
+        birthDate: new Date(input.birthDate),
+        gender: input.gender,
+        status: input.status,
+        registrationBranchId: branch.id
+      }
+    });
+
+    await prisma.patientContact.deleteMany({ where: { patientId: patient.id } });
+    await prisma.patientContact.create({
+      data: {
+        tenantId: tenant.id,
+        patientId: patient.id,
+        type: 'PHONE',
+        value: input.phone,
+        normalizedValueHash: getPhoneHash(input.phone),
+        isPrimary: true
+      }
+    });
+
+    if (input.city || input.addressLine) {
+      await prisma.patientAddress.deleteMany({ where: { patientId: patient.id } });
+      await prisma.patientAddress.create({
+        data: {
+          tenantId: tenant.id,
+          patientId: patient.id,
+          country: 'Таджикистан',
+          city: input.city ?? 'Душанбе',
+          addressLine: input.addressLine ?? 'район Сино',
+          isPrimary: true
+        }
+      });
+    }
+
+    return patient;
+  };
+
+  const p4 = await seedPatient({
+    code: 'P-000004',
+    firstName: 'Мадина',
+    lastName: 'Азизова',
+    middleName: 'Фарруховна',
+    birthDate: '1988-03-11',
+    gender: 'FEMALE',
+    status: 'VIP',
+    phone: '+992900445566',
+    city: 'Душанбе',
+    addressLine: 'проспект Рудаки, 87'
+  });
+
+  const p5 = await seedPatient({
+    code: 'P-000005',
+    firstName: 'Фаридун',
+    lastName: 'Назаров',
+    middleName: 'Саидович',
+    birthDate: '1979-08-24',
+    gender: 'MALE',
+    status: 'ACTIVE',
+    phone: '+992918001122',
+    city: 'Душанбе',
+    addressLine: 'ул. Шотемур, 14'
+  });
+
+  const p6 = await seedPatient({
+    code: 'P-000006',
+    firstName: 'Зухро',
+    lastName: 'Шарипова',
+    middleName: 'Каримовна',
+    birthDate: '1996-12-02',
+    gender: 'FEMALE',
+    status: 'NEW',
+    phone: '+992935551010',
+    city: 'Вахдат',
+    addressLine: 'ул. Сино, 7'
+  });
+
+  const p7 = await seedPatient({
+    code: 'P-000007',
+    firstName: 'Темур',
+    lastName: 'Холиков',
+    middleName: 'Абдуллоевич',
+    birthDate: '2014-06-18',
+    gender: 'MALE',
+    status: 'ACTIVE',
+    phone: '+992907770099',
+    city: 'Душанбе',
+    addressLine: 'мкр. 82, д. 9'
+  });
+
   // Family Group and Ties
   await prisma.familyMember.deleteMany({
     where: { patientId: { in: [p1.id, p2.id, p3.id] } }
@@ -754,6 +1144,22 @@ async function main(): Promise<void> {
     }
   });
 
+  for (const metric of [
+    { patientId: p4.id, totalVisits: 8, totalRevenue: 32800, ltv: 32800, averageCheck: 4100, loyaltyPoints: 420, lastVisitAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) },
+    { patientId: p5.id, totalVisits: 3, totalRevenue: 7800, ltv: 7800, averageCheck: 2600, loyaltyPoints: 80, lastVisitAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000) },
+    { patientId: p6.id, totalVisits: 1, totalRevenue: 1500, ltv: 1500, averageCheck: 1500, loyaltyPoints: 10, lastVisitAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000) },
+    { patientId: p7.id, totalVisits: 4, totalRevenue: 11600, ltv: 11600, averageCheck: 2900, loyaltyPoints: 110, lastVisitAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000) }
+  ]) {
+    await prisma.patientCrmMetric.upsert({
+      where: { patientId: metric.patientId },
+      update: metric,
+      create: {
+        tenantId: tenant.id,
+        ...metric
+      }
+    });
+  }
+
   await prisma.patientLead.deleteMany({ where: { patientId: p1.id } });
   await prisma.patientLead.create({
     data: {
@@ -768,12 +1174,36 @@ async function main(): Promise<void> {
   });
 
   // Tag Assignments
-  await prisma.patientTag.deleteMany({ where: { patientId: { in: [p1.id, p2.id, p3.id] } } });
+  await prisma.patientTag.deleteMany({ where: { patientId: { in: [p1.id, p2.id, p3.id, p4.id, p5.id, p6.id, p7.id] } } });
   await prisma.patientTag.create({
     data: {
       tenantId: tenant.id,
       patientId: p1.id,
       tagId: tagVip.id,
+      assignedBy: admin.id
+    }
+  });
+  await prisma.patientTag.create({
+    data: {
+      tenantId: tenant.id,
+      patientId: p4.id,
+      tagId: tagVip.id,
+      assignedBy: admin.id
+    }
+  });
+  await prisma.patientTag.create({
+    data: {
+      tenantId: tenant.id,
+      patientId: p6.id,
+      tagId: tagPregnancy.id,
+      assignedBy: admin.id
+    }
+  });
+  await prisma.patientTag.create({
+    data: {
+      tenantId: tenant.id,
+      patientId: p7.id,
+      tagId: tagChild.id,
       assignedBy: admin.id
     }
   });
@@ -964,38 +1394,17 @@ async function main(): Promise<void> {
   });
 
   // 14. Receptionist workplace dummy data (today's board cards, queue, call, invoice)
+  await prisma.receptionistDashboardCache.deleteMany({
+    where: { tenantId: tenant.id, branchId: branch.id }
+  });
+
   const todayStart = new Date();
   todayStart.setHours(10, 0, 0, 0);
   const todayEnd = new Date();
   todayEnd.setHours(10, 30, 0, 0);
 
-  const prevApp = await prisma.appointment.findFirst({
-    where: { tenantId: tenant.id, patientId: p1.id, appointmentNumber: 'A-SEED-001' }
-  });
-  if (prevApp) {
-    await prisma.invoiceItem.deleteMany({ where: { invoice: { appointmentId: prevApp.id } } });
-    await prisma.invoice.deleteMany({ where: { appointmentId: prevApp.id } });
-    await prisma.appointmentStatusHistory.deleteMany({ where: { appointmentId: prevApp.id } });
-    await prisma.appointmentResource.deleteMany({ where: { appointmentId: prevApp.id } });
-    await prisma.appointmentVisitState.deleteMany({ where: { appointmentId: prevApp.id } });
-    await prisma.visitQueue.deleteMany({ where: { appointmentId: prevApp.id } });
-    
-    const encounters = await prisma.encounter.findMany({ where: { appointmentId: prevApp.id } });
-    const encIds = encounters.map(e => e.id);
-    const compositions = await prisma.clinicalComposition.findMany({ where: { encounterId: { in: encIds } } });
-    const compIds = compositions.map(c => c.id);
-    const sections = await prisma.clinicalSection.findMany({ where: { compositionId: { in: compIds } } });
-    const secIds = sections.map(s => s.id);
-    
-    await prisma.clinicalElement.deleteMany({ where: { sectionId: { in: secIds } } });
-    await prisma.clinicalSection.deleteMany({ where: { compositionId: { in: compIds } } });
-    await prisma.clinicalComposition.deleteMany({ where: { encounterId: { in: encIds } } });
-    await prisma.encounterDiagnosis.deleteMany({ where: { encounterId: { in: encIds } } });
-    await prisma.prescriptionItem.deleteMany({ where: { prescription: { encounterId: { in: encIds } } } });
-    await prisma.prescription.deleteMany({ where: { encounterId: { in: encIds } } });
-    await prisma.encounter.deleteMany({ where: { appointmentId: prevApp.id } });
-    
-    await prisma.appointment.delete({ where: { id: prevApp.id } });
+  for (const appointmentNumber of ['A-SEED-001', 'A-DEMO-002', 'A-DEMO-003', 'A-DEMO-004', 'A-DEMO-005', 'A-DEMO-006', 'A-DEMO-007']) {
+    await deleteAppointmentByNumber(appointmentNumber);
   }
 
   const demoApp = await prisma.appointment.create({
@@ -1017,7 +1426,8 @@ async function main(): Promise<void> {
       createdBy: admin.id,
       resources: {
         create: [
-          { tenantId: tenant.id, resourceType: 'EMPLOYEE', resourceId: employee.id, reservedFrom: todayStart, reservedTo: todayEnd }
+          { tenantId: tenant.id, resourceType: 'EMPLOYEE', resourceId: employee.id, reservedFrom: todayStart, reservedTo: todayEnd },
+          { tenantId: tenant.id, resourceType: 'ROOM', resourceId: usiOffice.id, reservedFrom: todayStart, reservedTo: todayEnd }
         ]
       },
       statusHistory: {
@@ -1104,6 +1514,199 @@ async function main(): Promise<void> {
         ]
       }
     }
+  });
+
+  const atToday = (hour: number, minute = 0) => {
+    const value = new Date();
+    value.setHours(hour, minute, 0, 0);
+    return value;
+  };
+
+  const createDemoAppointment = async (input: {
+    appointmentNumber: string;
+    patientId: string;
+    employeeId: string;
+    serviceId: string;
+    roomId: string;
+    startHour: number;
+    startMinute?: number;
+    durationMinutes: number;
+    status: string;
+    priority?: string;
+    notes: string;
+    invoiceStatus?: 'PENDING_PAYMENT' | 'PAID';
+  }) => {
+    const startAt = atToday(input.startHour, input.startMinute ?? 0);
+    const endAt = new Date(startAt.getTime() + input.durationMinutes * 60 * 1000);
+    const appointment = await prisma.appointment.create({
+      data: {
+        tenantId: tenant.id,
+        branchId: branch.id,
+        patientId: input.patientId,
+        employeeId: input.employeeId,
+        serviceId: input.serviceId,
+        appointmentNumber: input.appointmentNumber,
+        bookingSource: 'ADMIN_PANEL',
+        appointmentType: 'CONSULTATION',
+        status: input.status,
+        priority: input.priority ?? 'NORMAL',
+        startAt,
+        endAt,
+        durationMinutes: input.durationMinutes,
+        checkedInAt: ['CHECKED_IN', 'IN_PROGRESS', 'COMPLETED_PENDING_PAYMENT', 'COMPLETED'].includes(input.status) ? startAt : null,
+        completedAt: ['COMPLETED_PENDING_PAYMENT', 'COMPLETED'].includes(input.status) ? endAt : null,
+        cancelledAt: ['CANCELLED', 'NO_SHOW'].includes(input.status) ? startAt : null,
+        notes: input.notes,
+        createdBy: admin.id,
+        resources: {
+          create: [
+            { tenantId: tenant.id, resourceType: 'EMPLOYEE', resourceId: input.employeeId, reservedFrom: startAt, reservedTo: endAt },
+            { tenantId: tenant.id, resourceType: 'ROOM', resourceId: input.roomId, reservedFrom: startAt, reservedTo: endAt }
+          ]
+        },
+        statusHistory: {
+          create: [
+            { tenantId: tenant.id, newStatus: 'SCHEDULED', changedBy: admin.id, reason: 'Demo seed' },
+            ...(input.status !== 'SCHEDULED'
+              ? [{ tenantId: tenant.id, oldStatus: 'SCHEDULED', newStatus: input.status, changedBy: admin.id, reason: 'Demo seed' }]
+              : [])
+          ]
+        }
+      }
+    });
+
+    if (input.status === 'CHECKED_IN') {
+      await prisma.visitQueue.create({
+        data: {
+          tenantId: tenant.id,
+          branchId: branch.id,
+          appointmentId: appointment.id,
+          queueNumber: `Q-${input.appointmentNumber.slice(-3)}`,
+          queueStatus: 'WAITING',
+          priority: input.priority ?? 'NORMAL',
+          estimatedWaitTime: input.priority === 'VIP' ? 5 : 15
+        }
+      });
+    }
+
+    if (input.invoiceStatus) {
+      const service = await prisma.service.findUniqueOrThrow({ where: { id: input.serviceId } });
+      const isPaid = input.invoiceStatus === 'PAID';
+      await prisma.invoice.create({
+        data: {
+          tenantId: tenant.id,
+          branchId: branch.id,
+          patientId: input.patientId,
+          appointmentId: appointment.id,
+          invoiceNumber: `INV-${input.appointmentNumber}`,
+          status: input.invoiceStatus,
+          subtotalAmount: service.basePrice,
+          discountAmount: 0,
+          taxAmount: 0,
+          totalAmount: service.basePrice,
+          paidAmount: isPaid ? service.basePrice : 0,
+          dueAmount: isPaid ? 0 : service.basePrice,
+          currency: 'TJS',
+          createdBy: admin.id,
+          items: {
+            create: [
+              {
+                tenantId: tenant.id,
+                serviceId: input.serviceId,
+                quantity: 1,
+                unitPrice: service.basePrice,
+                discountAmount: 0,
+                materialCost: 120,
+                taxAmount: 0,
+                totalAmount: service.basePrice,
+                performerEmployeeId: input.employeeId
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return appointment;
+  };
+
+  await createDemoAppointment({
+    appointmentNumber: 'A-DEMO-002',
+    patientId: p4.id,
+    employeeId: dentistEmployee.id,
+    serviceId: serviceDentalTherapy.id,
+    roomId: docOffice.id,
+    startHour: 9,
+    durationMinutes: 45,
+    status: 'CONFIRMED',
+    priority: 'VIP',
+    notes: 'VIP пациент, просит отдельный расчет после приема'
+  });
+
+  await createDemoAppointment({
+    appointmentNumber: 'A-DEMO-003',
+    patientId: p5.id,
+    employeeId: cardiologistEmployee.id,
+    serviceId: serviceCardioDiagnostics.id,
+    roomId: cardioOffice.id,
+    startHour: 9,
+    startMinute: 30,
+    durationMinutes: 30,
+    status: 'SCHEDULED',
+    notes: 'Первичная кардиологическая диагностика'
+  });
+
+  await createDemoAppointment({
+    appointmentNumber: 'A-DEMO-004',
+    patientId: p6.id,
+    employeeId: dentistEmployee.id,
+    serviceId: serviceConsultation.id,
+    roomId: treatmentRoom.id,
+    startHour: 10,
+    startMinute: 30,
+    durationMinutes: 30,
+    status: 'IN_PROGRESS',
+    notes: 'Пациент уже в кабинете, идет прием'
+  });
+
+  await createDemoAppointment({
+    appointmentNumber: 'A-DEMO-005',
+    patientId: p7.id,
+    employeeId: cardiologistEmployee.id,
+    serviceId: serviceCardioDiagnostics.id,
+    roomId: cardioOffice.id,
+    startHour: 11,
+    startMinute: 30,
+    durationMinutes: 30,
+    status: 'COMPLETED_PENDING_PAYMENT',
+    notes: 'Прием завершен, ожидается оплата в кассе',
+    invoiceStatus: 'PENDING_PAYMENT'
+  });
+
+  await createDemoAppointment({
+    appointmentNumber: 'A-DEMO-006',
+    patientId: p2.id,
+    employeeId: employee.id,
+    serviceId: serviceProcedure.id,
+    roomId: usiOffice.id,
+    startHour: 12,
+    startMinute: 30,
+    durationMinutes: 45,
+    status: 'COMPLETED',
+    notes: 'УЗИ выполнено, прием закрыт',
+    invoiceStatus: 'PAID'
+  });
+
+  await createDemoAppointment({
+    appointmentNumber: 'A-DEMO-007',
+    patientId: p3.id,
+    employeeId: dentistEmployee.id,
+    serviceId: serviceConsultation.id,
+    roomId: docOffice.id,
+    startHour: 14,
+    durationMinutes: 30,
+    status: 'CANCELLED',
+    notes: 'Отмена по просьбе родителя'
   });
 
   // 15. EMR Clinical Subsystem Seeding

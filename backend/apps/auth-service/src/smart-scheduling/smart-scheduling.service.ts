@@ -348,17 +348,38 @@ export class SmartSchedulingService {
   }
 
   async doctors(user: AuthenticatedUser) {
-    const assignments = await this.prisma.userBranchRole.findMany({
-      where: { tenantId: user.tenantId, branchId: { in: user.branchIds }, activeTo: null },
-      include: { user: true, branch: true, role: true }
+    const employees = await this.prisma.employee.findMany({
+      where: {
+        tenantId: user.tenantId,
+        status: 'ACTIVE',
+        positions: {
+          some: {
+            branchId: { in: user.branchIds },
+            activeTo: null,
+            position: { isMedicalStaff: true }
+          }
+        }
+      },
+      include: {
+        positions: {
+          where: { branchId: { in: user.branchIds }, activeTo: null },
+          include: { branch: true, position: true, specialty: true },
+          orderBy: { isPrimary: 'desc' }
+        }
+      },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }]
     });
-    return assignments.map((item) => ({
-      id: item.user.id,
-      name: `${item.user.lastName} ${item.user.firstName}`,
-      branchId: item.branchId,
-      branchName: item.branch.name,
-      role: item.role.code
-    }));
+
+    return employees.map((employee) => {
+      const primaryPosition = employee.positions[0];
+      return {
+        id: employee.id,
+        name: `${employee.lastName} ${employee.firstName}`,
+        branchId: primaryPosition?.branchId ?? user.branchIds[0],
+        branchName: primaryPosition?.branch.name ?? 'Филиал не назначен',
+        role: primaryPosition?.specialty?.name ?? primaryPosition?.position.name ?? 'Врач'
+      };
+    });
   }
 
   // Conflict Resolution Helpers

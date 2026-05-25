@@ -30,7 +30,13 @@ export class PatientCrmService {
     const [items, total] = await Promise.all([
       this.prisma.patient.findMany({
         where,
-        include: { contacts: { orderBy: { isPrimary: 'desc' } }, registrationBranch: true },
+        include: {
+          contacts: { orderBy: { isPrimary: 'desc' } },
+          registrationBranch: true,
+          tags: { include: { tag: true } },
+          metrics: true,
+          invoices: { where: { status: { in: ['DRAFT', 'PENDING_PAYMENT'] } } }
+        },
         orderBy: { createdAt: 'desc' },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize
