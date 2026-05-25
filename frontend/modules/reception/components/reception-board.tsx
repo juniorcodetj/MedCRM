@@ -14,6 +14,7 @@ import {
   useReceptionTransition,
   useReceptionCheckIn,
   usePatientPreview,
+  useUpdateQueuePriority,
   DashboardCounters
 } from '../hooks/use-reception-dashboard';
 
@@ -141,6 +142,7 @@ export function ReceptionBoard({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const dashboard = useReceptionDashboard(branchId);
   const transition = useReceptionTransition();
   const checkIn = useReceptionCheckIn();
+  const updatePriority = useUpdateQueuePriority();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -331,18 +333,45 @@ export function ReceptionBoard({ bootstrap }: { bootstrap: BootstrapPayload }) {
             </div>
             <PhoneCall size={20} />
           </div>
-          {queue.length ? queue.map((item, index) => (
-            <div className="queue-row" key={item.id}>
-              <strong className="queue-index">{index + 1}</strong>
-              <button
-                className="ghost-button"
-                style={{ padding: 0, minHeight: 'auto', justifyContent: 'flex-start', fontWeight: 600 }}
-                onClick={() => setPreviewPatientId(item.patientId)}
-                type="button"
-              >
-                {item.patient.fullName}
-              </button>
-              <span className={`status-badge status-${statusTone(item.status)}`}>{statusLabel(item.status)}</span>
+          {queue.length ? queue.map((item: any, index) => (
+            <div className="queue-row" key={item.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderBottom: '1px solid var(--border)', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+                <strong className="queue-index">{index + 1}</strong>
+                <button
+                  className="ghost-button"
+                  style={{ padding: 0, minHeight: 'auto', justifyContent: 'flex-start', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  onClick={() => setPreviewPatientId(item.patientId)}
+                  type="button"
+                >
+                  {item.patientName}
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                <select
+                  value={item.priority || 'NORMAL'}
+                  onChange={(e) => {
+                    updatePriority.mutate({ id: item.id, priority: e.target.value }, {
+                      onSuccess: () => toast('success', 'Приоритет изменен', 'Очередь автоматически пересчитана'),
+                      onError: () => toast('error', 'Ошибка', 'Не удалось обновить приоритет')
+                    });
+                  }}
+                  style={{
+                    padding: '2px 6px',
+                    fontSize: '11px',
+                    border: '1px solid var(--border)',
+                    borderRadius: '4px',
+                    background: 'var(--surface)',
+                    color: 'var(--ink)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="VIP">★ VIP</option>
+                  <option value="URGENT">⚡ Срочно</option>
+                  <option value="NORMAL">Обычный</option>
+                  <option value="LOW">Низкий</option>
+                </select>
+                <span className={`status-badge status-${statusTone(item.status)}`}>{statusLabel(item.status)}</span>
+              </div>
             </div>
           )) : (
             <div className="empty-state">

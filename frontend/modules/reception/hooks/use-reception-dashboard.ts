@@ -19,7 +19,7 @@ export type ReceptionDashboard = {
   date: string;
   columns: Record<string, Appointment[]>;
   counters: DashboardCounters;
-  queue: Appointment[];
+  queue: any[];
   recalculatedAt: string;
 };
 
@@ -74,6 +74,20 @@ export function useFastBooking() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['reception-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['appointments'] });
+    }
+  });
+}
+
+export function useUpdateQueuePriority() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, priority }: { id: string; priority: string }) =>
+      apiFetch<any>(`/reception/queue/${id}/priority`, {
+        method: 'PATCH',
+        body: JSON.stringify({ priority })
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['reception-dashboard'] });
     }
   });
 }

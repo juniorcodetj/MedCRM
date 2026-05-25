@@ -6,10 +6,18 @@ import { Patient } from '@/shared/types/bootstrap';
 
 type ListResponse = { items: Patient[]; total: number; page: number; pageSize: number; duplicateCandidates?: Patient[] };
 
-export function usePatients(q: string) {
+export function usePatients(q: string, status?: string, tagId?: string) {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (status) params.set('status', status);
+  if (tagId) params.set('tagId', tagId);
+
+  const queryString = params.toString();
+  const url = queryString ? `/patients/search?${queryString}` : '/patients';
+
   return useQuery({
-    queryKey: ['patients', q],
-    queryFn: () => apiFetch<ListResponse>(`/patients${q ? `/search?q=${encodeURIComponent(q)}` : ''}`)
+    queryKey: ['patients', q, status, tagId],
+    queryFn: () => apiFetch<ListResponse>(url)
   });
 }
 
@@ -61,6 +69,73 @@ export function usePatientTimeline(id: string) {
   return useQuery({
     queryKey: ['patient-timeline', id],
     queryFn: () => apiFetch<PatientTimelineEvent[]>(`/patients/${id}/timeline`)
+  });
+}
+
+export function useAddPatientContact(patientId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (contact: { type: string; value: string; isPrimary?: boolean; comment?: string }) =>
+      apiFetch<any>(`/patients/${patientId}/contacts`, { method: 'POST', body: JSON.stringify(contact) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['patient', patientId] });
+      queryClient.invalidateQueries({ queryKey: ['patient-timeline', patientId] });
+    }
+  });
+}
+
+export function useDeletePatientContact(patientId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (contactId: string) =>
+      apiFetch<any>(`/patients/${patientId}/contacts/${contactId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['patient', patientId] });
+      queryClient.invalidateQueries({ queryKey: ['patient-timeline', patientId] });
+    }
+  });
+}
+
+export function useAddPatientNote(patientId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (note: { noteText: string; isPinned?: boolean }) =>
+      apiFetch<any>(`/patients/${patientId}/notes`, { method: 'POST', body: JSON.stringify(note) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['patient', patientId] });
+      queryClient.invalidateQueries({ queryKey: ['patient-timeline', patientId] });
+    }
+  });
+}
+
+export function useListTags() {
+  return useQuery({
+    queryKey: ['patient-tags'],
+    queryFn: () => apiFetch<Array<{ id: string; name: string; color: string; code: string }>>('/patients/tags')
+  });
+}
+
+export function useAssignPatientTag(patientId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (tagId: string) =>
+      apiFetch<any>(`/patients/${patientId}/tags/${tagId}`, { method: 'POST', body: '{}' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['patient', patientId] });
+      queryClient.invalidateQueries({ queryKey: ['patient-timeline', patientId] });
+    }
+  });
+}
+
+export function useRemovePatientTag(patientId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (tagId: string) =>
+      apiFetch<any>(`/patients/${patientId}/tags/${tagId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['patient', patientId] });
+      queryClient.invalidateQueries({ queryKey: ['patient-timeline', patientId] });
+    }
   });
 }
 
