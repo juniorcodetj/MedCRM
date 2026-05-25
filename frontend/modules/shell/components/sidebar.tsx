@@ -4,14 +4,14 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ComponentType } from 'react';
 import {
-  BarChart3,
   CalendarDays,
   ClipboardList,
-  CreditCard,
+  FileText,
+  LogOut,
   LayoutDashboard,
-  MessageSquare,
   Settings,
   Stethoscope,
+  UserRoundCheck,
   Users
 } from 'lucide-react';
 import { BootstrapPayload } from '@/shared/types/bootstrap';
@@ -29,18 +29,18 @@ type NavItem = {
 const navItems: NavItem[] = [
   {
     href: '/dashboard',
-    label: 'Операционная панель',
+    label: 'Операционная',
     module: 'auth',
     permission: 'auth.bootstrap.read',
-    group: 'Операции',
+    group: 'Рабочая зона',
     icon: LayoutDashboard
   },
   {
     href: '/reception',
-    label: 'Регистратура',
+    label: 'Живая очередь',
     module: 'receptionist-workplace',
     permission: 'reception.dashboard.read',
-    group: 'Операции',
+    group: 'Рабочая зона',
     icon: ClipboardList
   },
   {
@@ -48,7 +48,7 @@ const navItems: NavItem[] = [
     label: 'Расписание',
     module: 'smart-scheduling',
     permission: 'scheduling.calendar.read',
-    group: 'Операции',
+    group: 'Рабочая зона',
     icon: CalendarDays
   },
   {
@@ -56,7 +56,7 @@ const navItems: NavItem[] = [
     label: 'Пациенты',
     module: 'patient-crm',
     permission: 'patients.read',
-    group: 'CRM',
+    group: 'Рабочая зона',
     icon: Users
   }
 ];
@@ -76,8 +76,8 @@ export function Sidebar({ bootstrap }: { bootstrap: BootstrapPayload }) {
           <Stethoscope size={19} />
         </span>
         <div className="sidebar-title">
-          <strong>MedCRM</strong>
-          <span>Clinic OS</span>
+          <strong>{bootstrap.tenant.name}</strong>
+          <span>{bootstrap.tenant.subscriptionPlan}</span>
         </div>
       </div>
 
@@ -100,21 +100,17 @@ export function Sidebar({ bootstrap }: { bootstrap: BootstrapPayload }) {
       ))}
 
       <section className="nav-section">
-        <div className="nav-section-label">Скоро</div>
-        <nav className="nav" aria-label="Будущие модули">
-          <Link href="/dashboard">
-            <CreditCard size={18} strokeWidth={2.2} />
-            Финансы
+        <div className="nav-section-label">Управление</div>
+        <nav className="nav" aria-label="Управление клиникой">
+          <Link href="/doctors">
+            <UserRoundCheck size={18} strokeWidth={2.2} />
+            Врачи
           </Link>
-          <Link href="/dashboard">
-            <MessageSquare size={18} strokeWidth={2.2} />
-            Коммуникации
+          <Link href="/dashboard" className="nav-disabled" aria-disabled="true">
+            <FileText size={18} strokeWidth={2.2} />
+            Отчёты
           </Link>
-          <Link href="/dashboard">
-            <BarChart3 size={18} strokeWidth={2.2} />
-            BI
-          </Link>
-          <Link href="/dashboard">
+          <Link href="/dashboard" className="nav-disabled" aria-disabled="true">
             <Settings size={18} strokeWidth={2.2} />
             Настройки
           </Link>
@@ -122,9 +118,14 @@ export function Sidebar({ bootstrap }: { bootstrap: BootstrapPayload }) {
       </section>
 
       <div className="sidebar-footer">
-        <span>Активные модули</span>
-        <strong>{bootstrap.enabledModules.length} подключено</strong>
-        <span>{bootstrap.permissions.length} прав доступа</span>
+        <div className="sidebar-user">
+          <span className="sidebar-user-avatar">АД</span>
+          <div>
+            <strong>Администратор</strong>
+            <span>{bootstrap.enabledModules.length} модулей · {bootstrap.permissions.length} прав</span>
+          </div>
+          <LogOut size={16} className="muted" />
+        </div>
       </div>
     </aside>
   );

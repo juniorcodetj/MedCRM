@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
-import { Bell, Building2, Search, UserRound } from 'lucide-react';
+import { Bell, Menu, RefreshCw, Search } from 'lucide-react';
 import { getBootstrap } from '@/shared/api/server-api';
 import { Sidebar } from '@/modules/shell/components/sidebar';
 import { AppQueryProvider } from '@/shared/query/query-provider';
@@ -19,14 +19,13 @@ export default async function ProtectedLayout({ children }: { children: ReactNod
       <Sidebar bootstrap={bootstrap} />
       <main className="main">
         <header className="topbar">
-          <div className="tenant-context">
-            <span className="avatar">
-              <Building2 size={18} />
-            </span>
-            <div>
-              <strong>{bootstrap.tenant.name}</strong>
-              <span>{branch ? branch.name : 'Филиал не выбран'} · {formatDate(new Date())}</span>
-            </div>
+          <div className="topbar-left">
+            <button className="icon-button topbar-menu" type="button" aria-label="Открыть меню" title="Меню">
+              <Menu size={18} />
+            </button>
+            <span className="topbar-divider" aria-hidden="true" />
+            <span className="topbar-date">{formatDate(new Date())}</span>
+            <span className="topbar-branch">{branch ? branch.name : 'Филиал не выбран'}</span>
           </div>
           <label className="global-search">
             <Search size={18} />
@@ -37,11 +36,15 @@ export default async function ProtectedLayout({ children }: { children: ReactNod
               <span className="dot" />
               Live
             </span>
-            <button className="icon-button" type="button" aria-label="Уведомления" title="Уведомления">
-              <Bell size={18} />
+            <button className="icon-button" type="button" aria-label="Обновить данные" title="Обновить данные">
+              <RefreshCw size={17} />
             </button>
-            <button className="icon-button" type="button" aria-label="Профиль" title={bootstrap.tenant.subscriptionPlan}>
-              <UserRound size={18} />
+            <button className="icon-button notification-button" type="button" aria-label="Уведомления" title="Уведомления">
+              <Bell size={18} />
+              <span className="notification-dot" aria-hidden="true" />
+            </button>
+            <button className="topbar-avatar" type="button" aria-label="Профиль" title={bootstrap.tenant.subscriptionPlan}>
+              АД
             </button>
           </div>
         </header>

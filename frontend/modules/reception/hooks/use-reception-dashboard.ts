@@ -9,15 +9,38 @@ export type DashboardCounters = {
   waiting: number;
   checkedIn: number;
   inProgress: number;
+  completedPendingPayment: number;
   completed: number;
   cancelled: number;
   noShow: number;
 };
 
+export type ReceptionAppointment = {
+  id: string;
+  patientId: string;
+  patientName: string;
+  patientCode: string;
+  patient: { fullName: string };
+  service?: { id: string; name: string } | null;
+  appointmentNumber: string;
+  age?: number | null;
+  phone?: string | null;
+  doctorName?: string | null;
+  roomName?: string | null;
+  startAt: string;
+  endAt: string;
+  status: string;
+  appointmentType?: string | null;
+  isVip?: boolean;
+  priority?: string | null;
+  debt?: number;
+  lastVisitAt?: string | null;
+};
+
 export type ReceptionDashboard = {
   branchId: string;
   date: string;
-  columns: Record<string, Appointment[]>;
+  columns: Record<string, ReceptionAppointment[]>;
   counters: DashboardCounters;
   queue: any[];
   recalculatedAt: string;
@@ -49,7 +72,7 @@ export function useReceptionTransition() {
 export function usePatientPreview(patientId?: string) {
   return useQuery({
     queryKey: ['patient-preview', patientId],
-    queryFn: () => apiFetch<Patient>(`/patients/${patientId}`),
+    queryFn: () => apiFetch<any>(`/reception/patient-preview/${patientId}`),
     enabled: !!patientId
   });
 }
